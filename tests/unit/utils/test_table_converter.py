@@ -1,7 +1,9 @@
 """Tests for the table_converter module."""
 
+import pytest
 from bs4 import BeautifulSoup
 
+import confluence_markdown_exporter.utils.table_converter as table_converter_module
 from confluence_markdown_exporter.utils.table_converter import TableConverter
 
 
@@ -107,3 +109,46 @@ class TestTableConverter:
         # Should have no escaped pipes
         assert "\\|" not in result
 
+    def test_skip_oversized_table_by_estimated_cells(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Skip table when estimated expanded size exceeds safety limit."""
+        monkeypatch.setattr(table_converter_module, "MAX_TABLE_CELLS", 4)
+        html = """
+        <table>
+            <tr><th>A</th><th>B</th></tr>
+            <tr><td rowspan="5">x</td><td>y</td></tr>
+        </table>
+        """
+        converter = TableConverter()
+        result = converter.convert(html)
+
+        assert "Skipped oversized table" in result
+
+    def test_skip_oversized_table_after_padding(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Skip table when real expanded cell count exceeds limit."""
+        monkeypatch.setattr(table_converter_module, "MAX_TABLE_CELLS", 3)
+        monkeypatch.setattr(table_converter_module, "_estimate_table_cells", lambda _rows: 1)
+        html = """
+        <table>
+            <tr><th>A</th><th>B</th><th>C</th></tr>
+            <tr><td>1</td><td>2</td><td>3</td></tr>
+        </table>
+        """
+        converter = TableConverter()
+        result = converter.convert(html)
+
+        assert "Skipped oversized table after expansion" in result
+
+    def test_skip_oversized_table_by_markdown_bytes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Skip table when generated markdown payload exceeds byte limit."""
+        monkeypatch.setattr(table_converter_module, "MAX_TABLE_CELLS", 1000)
+        monkeypatch.setattr(table_converter_module, "MAX_TABLE_MARKDOWN_BYTES", 10)
+        html = """
+        <table>
+            <tr><th>A</th></tr>
+            <tr><td>value value value</td></tr>
+        </table>
+        """
+        converter = TableConverter()
+        result = converter.convert(html)
+
+        assert "Skipped oversized markdown table" in result

@@ -281,6 +281,73 @@ class ExportConfig(BaseModel):
             "For self-hosted Confluence (CQL), this is internally capped at 25."
         ),
     )
+    frontmatter_providers: list[str] = Field(
+        default_factory=lambda: ["page_properties", "base", "obsidian", "diagnostics"],
+        title="Frontmatter Providers",
+        description=(
+            "Ordered list of frontmatter providers to compose final YAML metadata. "
+            "Set to empty list to disable frontmatter."
+        ),
+        examples=[["page_properties"], ["base", "obsidian"], ["base", "diagnostics"]],
+    )
+
+
+class V2Config(BaseModel):
+    """Configuration for the V2 incremental sync orchestrator."""
+
+    mode: Literal["incremental", "full", "resume"] = Field(
+        default="incremental",
+        title="V2 Mode",
+        description="Sync mode for V2 runner: incremental, full, or resume.",
+    )
+    from_ts: str = Field(
+        default="auto",
+        title="V2 From Timestamp",
+        description=(
+            "Start timestamp for incremental sync in ISO-8601 format, or 'auto' to use "
+            "the previous successful V2 run checkpoint."
+        ),
+    )
+    state_db_path: Path = Field(
+        default=Path(".cme-v2/export-state.db"),
+        title="V2 State DB Path",
+        description="Path to SQLite database used by V2 state store.",
+    )
+    max_fetch_workers: int = Field(
+        default=8,
+        title="V2 Max Fetch Workers",
+        description="Maximum parallel workers for page processing in V2 sync.",
+    )
+    max_convert_workers: int = Field(
+        default=6,
+        title="V2 Max Convert Workers",
+        description="Conversion worker cap reserved for staged V2 processing.",
+    )
+    max_attachment_workers: int = Field(
+        default=3,
+        title="V2 Max Attachment Workers",
+        description="Attachment worker cap reserved for staged V2 processing.",
+    )
+    global_rps: float = Field(
+        default=5.0,
+        title="V2 Global RPS",
+        description="Global request rate limit per second during V2 sync.",
+    )
+    max_retries: int = Field(
+        default=4,
+        title="V2 Max Retries",
+        description="Retry budget per page in V2 sync.",
+    )
+    timeout_seconds: int = Field(
+        default=1800,
+        title="V2 Timeout Seconds",
+        description="Overall timeout budget for a V2 sync run.",
+    )
+    space_keys: list[str] = Field(
+        default_factory=list,
+        title="V2 Space Keys",
+        description="Optional list of space keys to scope V2 discovery.",
+    )
 
 
 class ConfigModel(BaseModel):
@@ -291,6 +358,7 @@ class ConfigModel(BaseModel):
         default_factory=ConnectionConfig, title="Connection Configuration"
     )
     auth: AuthConfig = Field(default_factory=AuthConfig, title="Authentication")
+    v2: V2Config = Field(default_factory=V2Config, title="V2 Sync Settings")
 
 
 def load_app_data() -> dict[str, dict]:
@@ -316,6 +384,7 @@ def get_settings() -> ConfigModel:
         export=ExportConfig(**data.get("export", {})),
         connection_config=ConnectionConfig(**data.get("connection_config", {})),
         auth=AuthConfig(**data.get("auth", {})),
+        v2=V2Config(**data.get("v2", {})),
     )
 
 

@@ -145,5 +145,91 @@ def version() -> None:
     typer.echo(f"confluence-markdown-exporter {__version__}")
 
 
+@app.command(
+    help=(
+        "Run V2 sync orchestrator with SQLite checkpointing "
+        "(incremental/full/resume)."
+    )
+)
+def sync(
+    mode: Annotated[
+        str | None,
+        typer.Option(help="Sync mode override. Defaults to config.v2.mode"),
+    ] = None,
+    from_ts: Annotated[
+        str | None,
+        typer.Option(
+            help=(
+                "Incremental lower bound timestamp in ISO format, "
+                "or 'auto'. Defaults to config.v2.from_ts."
+            )
+        ),
+    ] = None,
+    state_db_path: Annotated[
+        Path | None,
+        typer.Option(help="Override SQLite state DB path (config.v2.state_db_path by default)."),
+    ] = None,
+    space_keys: Annotated[
+        list[str] | None,
+        typer.Option(
+            help=(
+                "Optional repeatable space key filter, "
+                "e.g. --space-keys ENG --space-keys DOCS"
+            )
+        ),
+    ] = None,
+    max_fetch_workers: Annotated[
+        int | None,
+        typer.Option(help="Override max fetch workers."),
+    ] = None,
+    max_convert_workers: Annotated[
+        int | None,
+        typer.Option(help="Override max convert workers."),
+    ] = None,
+    max_attachment_workers: Annotated[
+        int | None,
+        typer.Option(help="Override max write/attachment workers."),
+    ] = None,
+    global_rps: Annotated[
+        float | None,
+        typer.Option(help="Override global request rate limit (requests/sec)."),
+    ] = None,
+    max_retries: Annotated[
+        int | None,
+        typer.Option(help="Override retry budget per page."),
+    ] = None,
+    timeout_seconds: Annotated[
+        int | None,
+        typer.Option(help="Override total timeout for the run in seconds."),
+    ] = None,
+) -> None:
+    """Run V2 incremental sync."""
+    from confluence_markdown_exporter.v2_sync import run_v2_sync
+
+    if mode is not None and mode not in {"incremental", "full", "resume"}:
+        msg = "Invalid --mode. Expected one of: incremental, full, resume."
+        raise typer.BadParameter(msg)
+
+    result = run_v2_sync(
+        mode=mode,
+        from_ts=from_ts,
+        space_keys=space_keys,
+        state_db_path=state_db_path,
+        max_fetch_workers=max_fetch_workers,
+        max_convert_workers=max_convert_workers,
+        max_attachment_workers=max_attachment_workers,
+        global_rps=global_rps,
+        max_retries=max_retries,
+        timeout_seconds=timeout_seconds,
+    )
+
+    typer.echo(
+        f"V2 run {result.run_id} ({result.mode}) completed: "
+        f"discovered={result.discovered}, enqueued={result.enqueued}, "
+        f"processed={result.processed}, updated={result.updated}, failed={result.failed}, "
+        f"from_ts={result.from_ts or 'none'}, to_ts={result.to_ts}"
+    )
+
+
 if __name__ == "__main__":
     app()

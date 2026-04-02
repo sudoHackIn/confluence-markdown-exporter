@@ -20,7 +20,6 @@ from typing import cast
 from urllib.parse import unquote
 from urllib.parse import urlparse
 
-import yaml
 from atlassian.errors import ApiError
 from atlassian.errors import ApiNotFoundError
 from bs4 import BeautifulSoup
@@ -42,6 +41,8 @@ from confluence_markdown_exporter.utils.drawio_converter import load_and_parse_d
 from confluence_markdown_exporter.utils.export import sanitize_filename
 from confluence_markdown_exporter.utils.export import sanitize_key
 from confluence_markdown_exporter.utils.export import save_file
+from confluence_markdown_exporter.utils.frontmatter import FrontmatterContext
+from confluence_markdown_exporter.utils.frontmatter import build_frontmatter_markdown
 from confluence_markdown_exporter.utils.lockfile import LockfileManager
 from confluence_markdown_exporter.utils.table_converter import TableConverter
 from confluence_markdown_exporter.utils.type_converter import str_to_bool
@@ -656,24 +657,29 @@ class Page(Document):
         @property
         def markdown(self) -> str:
             md_body = self.convert(self.page.html)
-            markdown = f"{self.front_matter}\n"
+            front_matter = self.front_matter(md_body)
+            markdown = f"{front_matter}\n" if front_matter else ""
             if settings.export.page_breadcrumbs:
                 markdown += f"{self.breadcrumbs}\n"
             markdown += f"{md_body}\n"
             return markdown
 
-        @property
-        def front_matter(self) -> str:
+        def front_matter(self, md_body: str) -> str:
             indent = self.options["front_matter_indent"]
             self.set_page_properties(tags=self.labels)
-
-            if not self.page_properties:
+            provider_names = settings.export.frontmatter_providers
+            if not provider_names:
                 return ""
-
-            yml = yaml.dump(self.page_properties, indent=indent).strip()
-            # Indent the root level list items
-            yml = re.sub(r"^( *)(- )", r"\1" + " " * indent + r"\2", yml, flags=re.MULTILINE)
-            return f"---\n{yml}\n---\n"
+            return build_frontmatter_markdown(
+                context=FrontmatterContext(
+                    page=self.page,
+                    page_properties=self.page_properties,
+                    labels=self.labels,
+                    markdown_body=md_body,
+                ),
+                provider_names=provider_names,
+                indent=indent,
+            )
 
         @property
         def breadcrumbs(self) -> str:
@@ -1142,6 +1148,12 @@ class Page(Document):
             if match := re.search(r"\|diagramName=(.+?)\|", str(el)):
                 drawio_name = match.group(1)
                 preview_name = f"{drawio_name}.png"
+
+                # Prefer deterministic text output when DrawIO embeds Mermaid payload.
+                drawio_mermaid = self._convert_drawio_embedded_mermaid(preview_name)
+                if drawio_mermaid:
+                    return f"\n{drawio_mermaid}\n\n"
+
                 drawio_attachments = self.page.get_attachments_by_title(drawio_name)
                 preview_attachments = self.page.get_attachments_by_title(preview_name)
 

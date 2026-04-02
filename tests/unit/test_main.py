@@ -66,6 +66,7 @@ class TestAppConfiguration:
             "pages-with-descendants",
             "spaces",
             "all-spaces",
+            "sync",
             "config",
             "version",
         ]
