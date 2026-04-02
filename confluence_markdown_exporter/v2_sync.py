@@ -750,7 +750,15 @@ def _collect_results(
                 msg = f"V2 sync timed out after {timeout_seconds} seconds"
                 raise TimeoutError(msg)
 
-            result = results_queue.get(timeout=min(1.0, remaining))
+            try:
+                result = results_queue.get(timeout=min(1.0, remaining))
+            except queue.Empty:
+                fetched, converted, written, failed_stage = stats.snapshot()
+                pbar.set_postfix_str(
+                    "fetched="
+                    f"{fetched} converted={converted} written={written} failed={failed_stage}"
+                )
+                continue
             processed += 1
             if result.success:
                 updated += 1
