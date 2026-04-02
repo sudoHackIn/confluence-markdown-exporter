@@ -422,26 +422,43 @@ def _build_discover_cql(space_keys: list[str], from_ts: str | None) -> str:
 def _discover_pages(space_keys: list[str], from_ts: str | None) -> list[PageCandidate]:
     """Discover page candidates via CQL search with pagination."""
     cql = _build_discover_cql(space_keys=space_keys, from_ts=from_ts)
+    logger.info(
+        "Discover started: cql=%s",
+        cql,
+    )
     params: dict[str, Any] = {
         "cql": cql,
         "expand": "version,space",
         "limit": 250,
     }
 
+    request_count = 0
     results: list[dict[str, Any]] = []
     response = confluence.get("rest/api/content/search", params=params)
+    request_count += 1
     if response:
         results.extend(response.get("results", []))
         next_path = response.get("_links", {}).get("next")
+        logger.info(
+            "Discover progress: requests=%d pages=%d",
+            request_count,
+            len(results),
+        )
     else:
         next_path = None
 
     while next_path:
         response = confluence.get(next_path)
+        request_count += 1
         if not response:
             break
         results.extend(response.get("results", []))
         next_path = response.get("_links", {}).get("next")
+        logger.info(
+            "Discover progress: requests=%d pages=%d",
+            request_count,
+            len(results),
+        )
 
     candidates: list[PageCandidate] = []
     for item in results:
@@ -460,6 +477,11 @@ def _discover_pages(space_keys: list[str], from_ts: str | None) -> list[PageCand
                 last_modified=last_modified,
             )
         )
+    logger.info(
+        "Discover completed: requests=%d pages=%d",
+        request_count,
+        len(candidates),
+    )
     return candidates
 
 

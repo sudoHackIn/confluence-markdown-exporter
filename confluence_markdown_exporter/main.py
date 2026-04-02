@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 from typing import Annotated
@@ -16,6 +17,20 @@ from confluence_markdown_exporter.utils.type_converter import str_to_bool
 DEBUG: bool = str_to_bool(os.getenv("DEBUG", "False"))
 
 app = typer.Typer()
+logger = logging.getLogger(__name__)
+
+
+def _ensure_sync_logging() -> None:
+    """Ensure INFO logs are visible for long-running sync operations."""
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        )
+        return
+    if root_logger.level > logging.INFO:
+        root_logger.setLevel(logging.INFO)
 
 
 def override_output_path_config(value: Path | None) -> None:
@@ -205,6 +220,10 @@ def sync(
 ) -> None:
     """Run V2 incremental sync."""
     from confluence_markdown_exporter.v2_sync import run_v2_sync
+
+    _ensure_sync_logging()
+    typer.echo("Starting V2 sync run. Stage: discover")
+    logger.info("V2 sync command started")
 
     if mode is not None and mode not in {"incremental", "full", "resume"}:
         msg = "Invalid --mode. Expected one of: incremental, full, resume."
