@@ -1,5 +1,6 @@
 """Unit tests for main module."""
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -7,9 +8,11 @@ from unittest.mock import patch
 import pytest
 import typer
 
+from confluence_markdown_exporter.main import _resolve_sync_from_ts
 from confluence_markdown_exporter.main import app
 from confluence_markdown_exporter.main import config
 from confluence_markdown_exporter.main import override_output_path_config
+from confluence_markdown_exporter.main import sync
 from confluence_markdown_exporter.main import version
 
 
@@ -110,3 +113,45 @@ class TestAppConfiguration:
         config("auth.confluence", show=False)
 
         mock_menu_loop.assert_called_once_with("auth.confluence")
+
+
+class TestSyncTodayFlag:
+    """Test cases for sync --today behavior."""
+
+    def test_resolve_sync_from_ts_passthrough(self) -> None:
+        assert _resolve_sync_from_ts("2026-04-03T00:00:00+03:00", today=False) == (
+            "2026-04-03T00:00:00+03:00"
+        )
+
+    def test_resolve_sync_from_ts_today_returns_start_of_day(self) -> None:
+        value = _resolve_sync_from_ts(None, today=True)
+        assert value is not None
+        assert re.search(r"T00:00:00", value) is not None
+
+    def test_resolve_sync_from_ts_today_conflicts_with_from_ts(self) -> None:
+        with pytest.raises(typer.BadParameter):
+            _resolve_sync_from_ts("2026-04-03T00:00:00+03:00", today=True)
+
+    def test_sync_passes_today_resolved_from_ts(self) -> None:
+        with (
+            patch("confluence_markdown_exporter.main._ensure_sync_logging"),
+            patch("confluence_markdown_exporter.main.typer.echo"),
+            patch("confluence_markdown_exporter.v2_sync.run_v2_sync") as mock_run_v2_sync,
+        ):
+            mock_run_v2_sync.return_value = MagicMock(
+                run_id="r1",
+                mode="incremental",
+                discovered=1,
+                enqueued=1,
+                processed=1,
+                updated=1,
+                failed=0,
+                from_ts="2026-04-03T00:00:00+03:00",
+                to_ts="2026-04-03T01:00:00+03:00",
+            )
+
+            sync(mode="incremental", today=True)
+
+            kwargs = mock_run_v2_sync.call_args.kwargs
+            assert kwargs["from_ts"] is not None
+            assert "T00:00:00" in kwargs["from_ts"]

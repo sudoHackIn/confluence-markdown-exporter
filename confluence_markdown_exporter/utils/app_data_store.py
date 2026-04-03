@@ -282,7 +282,14 @@ class ExportConfig(BaseModel):
         ),
     )
     frontmatter_providers: list[str] = Field(
-        default_factory=lambda: ["page_properties", "base", "obsidian", "diagnostics"],
+        default_factory=lambda: [
+            "page_properties",
+            "base",
+            "obsidian",
+            "diagnostics",
+            "obsidian_flat",
+            "obsidian_links",
+        ],
         title="Frontmatter Providers",
         description=(
             "Ordered list of frontmatter providers to compose final YAML metadata. "

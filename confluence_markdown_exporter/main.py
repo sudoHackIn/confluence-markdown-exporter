@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -31,6 +32,18 @@ def _ensure_sync_logging() -> None:
         return
     if root_logger.level > logging.INFO:
         root_logger.setLevel(logging.INFO)
+
+
+def _resolve_sync_from_ts(from_ts: str | None, *, today: bool) -> str | None:
+    """Resolve effective ``from_ts`` based on explicit value or --today flag."""
+    if today and from_ts is not None:
+        msg = "Use either --today or --from-ts, not both."
+        raise typer.BadParameter(msg)
+    if today:
+        now = datetime.now().astimezone()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return today_start.isoformat()
+    return from_ts
 
 
 def override_output_path_config(value: Path | None) -> None:
@@ -166,7 +179,7 @@ def version() -> None:
         "(incremental/full/resume)."
     )
 )
-def sync(
+def sync(  # noqa: PLR0913
     mode: Annotated[
         str | None,
         typer.Option(help="Sync mode override. Defaults to config.v2.mode"),
@@ -180,6 +193,13 @@ def sync(
             )
         ),
     ] = None,
+    today: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            "--today",
+            help="Shortcut for incremental sync from local start-of-day.",
+        ),
+    ] = False,
     state_db_path: Annotated[
         Path | None,
         typer.Option(help="Override SQLite state DB path (config.v2.state_db_path by default)."),
@@ -228,10 +248,11 @@ def sync(
     if mode is not None and mode not in {"incremental", "full", "resume"}:
         msg = "Invalid --mode. Expected one of: incremental, full, resume."
         raise typer.BadParameter(msg)
+    effective_from_ts = _resolve_sync_from_ts(from_ts=from_ts, today=today)
 
     result = run_v2_sync(
         mode=mode,
-        from_ts=from_ts,
+        from_ts=effective_from_ts,
         space_keys=space_keys,
         state_db_path=state_db_path,
         max_fetch_workers=max_fetch_workers,
