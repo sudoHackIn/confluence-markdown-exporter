@@ -173,6 +173,59 @@ def version() -> None:
     typer.echo(f"confluence-markdown-exporter {__version__}")
 
 
+@app.command(help="Export V2 SQLite state to a JSON snapshot for transfer/backup.")
+def state_export(
+    db_path: Annotated[
+        Path | None,
+        typer.Option(
+            help="Path to V2 SQLite DB. Defaults to config.v2.state_db_path.",
+        ),
+    ] = None,
+    snapshot_path: Annotated[
+        Path,
+        typer.Option(
+            help="Target JSON snapshot path.",
+        ),
+    ] = Path(".cme-v2/state-snapshot.json"),
+) -> None:
+    from confluence_markdown_exporter.v2_sync import export_state_snapshot
+
+    settings = get_settings()
+    effective_db_path = db_path or settings.v2.state_db_path
+    payload = export_state_snapshot(db_path=effective_db_path, snapshot_path=snapshot_path)
+    table_counts = {key: len(value) for key, value in payload["tables"].items()}
+    typer.echo(
+        f"Exported V2 state snapshot to {snapshot_path} from {effective_db_path}. "
+        f"rows={table_counts}"
+    )
+
+
+@app.command(help="Import V2 SQLite state from a JSON snapshot.")
+def state_import(
+    snapshot_path: Annotated[
+        Path,
+        typer.Option(
+            help="Source JSON snapshot path.",
+        ),
+    ] = Path(".cme-v2/state-snapshot.json"),
+    db_path: Annotated[
+        Path | None,
+        typer.Option(
+            help="Path to V2 SQLite DB. Defaults to config.v2.state_db_path.",
+        ),
+    ] = None,
+) -> None:
+    from confluence_markdown_exporter.v2_sync import import_state_snapshot
+
+    settings = get_settings()
+    effective_db_path = db_path or settings.v2.state_db_path
+    counts = import_state_snapshot(db_path=effective_db_path, snapshot_path=snapshot_path)
+    typer.echo(
+        f"Imported V2 state snapshot from {snapshot_path} into {effective_db_path}. "
+        f"rows={counts}"
+    )
+
+
 @app.command(
     help=(
         "Run V2 sync orchestrator with SQLite checkpointing "
@@ -203,6 +256,15 @@ def sync(  # noqa: PLR0913
     state_db_path: Annotated[
         Path | None,
         typer.Option(help="Override SQLite state DB path (config.v2.state_db_path by default)."),
+    ] = None,
+    artifacts_path: Annotated[
+        Path | None,
+        typer.Option(
+            help=(
+                "Override artifacts directory for failed TSV and run manifests "
+                "(config.v2.artifacts_path by default)."
+            )
+        ),
     ] = None,
     space_keys: Annotated[
         list[str] | None,
@@ -255,6 +317,7 @@ def sync(  # noqa: PLR0913
         from_ts=effective_from_ts,
         space_keys=space_keys,
         state_db_path=state_db_path,
+        artifacts_path=artifacts_path,
         max_fetch_workers=max_fetch_workers,
         max_convert_workers=max_convert_workers,
         max_attachment_workers=max_attachment_workers,

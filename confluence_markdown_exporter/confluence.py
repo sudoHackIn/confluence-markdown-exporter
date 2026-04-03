@@ -259,6 +259,16 @@ class Attachment(Document):
     comment: str
 
     @property
+    def export_file_id(self) -> str:
+        """Return a stable file identifier for export paths.
+
+        Some Confluence deployments omit ``extensions.fileId`` for attachments.
+        In that case we fall back to attachment ``id`` so filenames don't start
+        with dots like ``.png`` (hidden files on Unix-like systems).
+        """
+        return self.file_id or str(self.id)
+
+    @property
     def extension(self) -> str:
         if self.comment == "draw.io diagram" and self.media_type == "application/vnd.jgraph.mxfile":
             return ".drawio"
@@ -269,7 +279,7 @@ class Attachment(Document):
 
     @property
     def filename(self) -> str:
-        return f"{self.file_id}{self.extension}"
+        return f"{self.export_file_id}{self.extension}"
 
     @property
     def _template_vars(self) -> dict[str, str]:
@@ -277,8 +287,8 @@ class Attachment(Document):
             **super()._template_vars,
             "attachment_id": str(self.id),
             "attachment_title": sanitize_filename(self.title),
-            # file_id is a GUID and does not need sanitized.
-            "attachment_file_id": self.file_id,
+            # file_id is a GUID and does not need sanitized. If missing, fallback to id.
+            "attachment_file_id": self.export_file_id,
             "attachment_extension": self.extension,
         }
 

@@ -320,6 +320,14 @@ class V2Config(BaseModel):
         title="V2 State DB Path",
         description="Path to SQLite database used by V2 state store.",
     )
+    artifacts_path: Path | None = Field(
+        default=None,
+        title="V2 Artifacts Path",
+        description=(
+            "Optional directory for V2 run artifacts (manifest and failed TSV). "
+            "If unset, artifacts are written under output_path/.cme-v2/meta."
+        ),
+    )
     max_fetch_workers: int = Field(
         default=8,
         title="V2 Max Fetch Workers",

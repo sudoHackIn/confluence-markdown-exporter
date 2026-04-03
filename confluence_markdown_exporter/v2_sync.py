@@ -69,6 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_status_started
 CREATE INDEX IF NOT EXISTS idx_queue_run_stage
     ON queue_checkpoint(run_id, stage);
 """
+STATE_SNAPSHOT_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -393,6 +394,133 @@ class V2StateStore:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _fetch_all_rows_as_dicts(conn: sqlite3.Connection, query: str) -> list[dict[str, object]]:
+    rows = conn.execute(query).fetchall()
+    return [dict(row) for row in rows]
+
+
+def export_state_snapshot(*, db_path: Path, snapshot_path: Path) -> dict[str, object]:
+    """Export V2 SQLite state into a JSON snapshot file."""
+    if not db_path.exists():
+        msg = f"State DB not found: {db_path}"
+        raise FileNotFoundError(msg)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        payload = {
+            "snapshot_version": STATE_SNAPSHOT_VERSION,
+            "exported_at": _utc_now_iso(),
+            "source_db_path": str(db_path),
+            "tables": {
+                "runs": _fetch_all_rows_as_dicts(
+                    conn,
+                    "SELECT * FROM runs ORDER BY started_at ASC",
+                ),
+                "pages_state": _fetch_all_rows_as_dicts(
+                    conn,
+                    "SELECT * FROM pages_state ORDER BY page_id ASC",
+                ),
+                "queue_checkpoint": _fetch_all_rows_as_dicts(
+                    conn,
+                    "SELECT * FROM queue_checkpoint ORDER BY run_id ASC, page_id ASC",
+                ),
+            },
+        }
+    finally:
+        conn.close()
+
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(
+        snapshot_path,
+        json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+    )
+    return payload
+
+
+def import_state_snapshot(*, db_path: Path, snapshot_path: Path) -> dict[str, int]:
+    """Import JSON snapshot into V2 SQLite state store using upserts."""
+    raw = snapshot_path.read_text(encoding="utf-8")
+    payload = json.loads(raw)
+    tables = payload.get("tables", {})
+
+    store = V2StateStore(db_path)
+    conn = store._conn
+    inserted = {"runs": 0, "pages_state": 0, "queue_checkpoint": 0}
+
+    try:
+        with store._lock:
+            conn.execute("BEGIN")
+            for row in tables.get("runs", []):
+                conn.execute(
+                    """
+                    INSERT INTO runs(run_id, started_at, finished_at, status, from_ts, to_ts,
+                                     processed, updated, failed)
+                    VALUES (:run_id, :started_at, :finished_at, :status, :from_ts, :to_ts,
+                            :processed, :updated, :failed)
+                    ON CONFLICT(run_id) DO UPDATE SET
+                      started_at = excluded.started_at,
+                      finished_at = excluded.finished_at,
+                      status = excluded.status,
+                      from_ts = excluded.from_ts,
+                      to_ts = excluded.to_ts,
+                      processed = excluded.processed,
+                      updated = excluded.updated,
+                      failed = excluded.failed
+                    """,
+                    row,
+                )
+                inserted["runs"] += 1
+
+            for row in tables.get("pages_state", []):
+                conn.execute(
+                    """
+                    INSERT INTO pages_state(
+                        page_id, space_key, version, last_modified,
+                        content_hash, status, last_success_at, last_error
+                    )
+                    VALUES (
+                        :page_id, :space_key, :version, :last_modified,
+                        :content_hash, :status, :last_success_at, :last_error
+                    )
+                    ON CONFLICT(page_id) DO UPDATE SET
+                      space_key = excluded.space_key,
+                      version = excluded.version,
+                      last_modified = excluded.last_modified,
+                      content_hash = excluded.content_hash,
+                      status = excluded.status,
+                      last_success_at = excluded.last_success_at,
+                      last_error = excluded.last_error
+                    """,
+                    row,
+                )
+                inserted["pages_state"] += 1
+
+            for row in tables.get("queue_checkpoint", []):
+                conn.execute(
+                    """
+                    INSERT INTO queue_checkpoint(run_id, page_id, stage, attempt, updated_at)
+                    VALUES (:run_id, :page_id, :stage, :attempt, :updated_at)
+                    ON CONFLICT(run_id, page_id) DO UPDATE SET
+                      stage = excluded.stage,
+                      attempt = excluded.attempt,
+                      updated_at = excluded.updated_at
+                    """,
+                    row,
+                )
+                inserted["queue_checkpoint"] += 1
+
+            conn.commit()
+    except Exception:
+        with store._lock:
+            conn.rollback()
+        raise
+    finally:
+        store.close()
+
+    return inserted
 
 
 def _parse_timestamp_input(value: str | None) -> str | None:
@@ -877,17 +1005,20 @@ def _run_pipeline(
     return processed, updated, failed, failures
 
 
-def _artifacts_root(export_root: Path) -> Path:
+def _artifacts_root(artifacts_path: Path | None, export_root: Path) -> Path:
+    if artifacts_path is not None:
+        return artifacts_path
     return export_root / ".cme-v2" / "meta"
 
 
 def _write_failed_tsv(
     *,
+    artifacts_path: Path | None,
     export_root: Path,
     run_id: str,
     failures: list[PageResult],
 ) -> Path:
-    logs_dir = _artifacts_root(export_root) / "import-logs"
+    logs_dir = _artifacts_root(artifacts_path, export_root) / "import-logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     failed_tsv_path = logs_dir / f"{run_id}.failed.tsv"
 
@@ -902,11 +1033,12 @@ def _write_failed_tsv(
 
 def _write_manifest(
     *,
+    artifacts_path: Path | None,
     export_root: Path,
     run_id: str,
     manifest: dict[str, Any],
 ) -> Path:
-    manifest_dir = _artifacts_root(export_root) / "run-manifests"
+    manifest_dir = _artifacts_root(artifacts_path, export_root) / "run-manifests"
     manifest_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = manifest_dir / f"{run_id}.manifest.json"
     manifest_content = json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True)
@@ -958,12 +1090,13 @@ def _discover_for_mode(
     return discovered
 
 
-def run_v2_sync(
+def run_v2_sync(  # noqa: PLR0913
     *,
     mode: str | None = None,
     from_ts: str | None = None,
     space_keys: list[str] | None = None,
     state_db_path: Path | None = None,
+    artifacts_path: Path | None = None,
     max_fetch_workers: int | None = None,
     max_convert_workers: int | None = None,
     max_attachment_workers: int | None = None,
@@ -978,6 +1111,7 @@ def run_v2_sync(
     resolved_mode = mode or v2_config.mode
     resolved_space_keys = space_keys if space_keys is not None else v2_config.space_keys
     db_path = state_db_path or v2_config.state_db_path
+    resolved_artifacts_path = artifacts_path or v2_config.artifacts_path
     resolved_global_rps = global_rps if global_rps is not None else v2_config.global_rps
     resolved_max_retries = max_retries if max_retries is not None else v2_config.max_retries
     resolved_timeout_seconds = (
@@ -1078,11 +1212,13 @@ def run_v2_sync(
         )
 
         failed_tsv_path = _write_failed_tsv(
+            artifacts_path=resolved_artifacts_path,
             export_root=settings.export.output_path,
             run_id=run_id,
             failures=failures,
         )
         _write_manifest(
+            artifacts_path=resolved_artifacts_path,
             export_root=settings.export.output_path,
             run_id=run_id,
             manifest={
@@ -1115,6 +1251,9 @@ def run_v2_sync(
                 ],
                 "config": {
                     "state_db_path": str(db_path),
+                    "artifacts_path": (
+                        str(resolved_artifacts_path) if resolved_artifacts_path else None
+                    ),
                     "space_keys": resolved_space_keys,
                     "max_fetch_workers": effective_fetch,
                     "max_convert_workers": effective_convert,
@@ -1146,11 +1285,13 @@ def run_v2_sync(
             failed=max(1, failed),
         )
         _write_failed_tsv(
+            artifacts_path=resolved_artifacts_path,
             export_root=settings.export.output_path,
             run_id=run_id,
             failures=failures,
         )
         _write_manifest(
+            artifacts_path=resolved_artifacts_path,
             export_root=settings.export.output_path,
             run_id=run_id,
             manifest={

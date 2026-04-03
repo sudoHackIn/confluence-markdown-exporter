@@ -200,6 +200,108 @@ export CME_CONFIG_PATH=/path/to/your/custom_config.json
 
 This is useful for using different configs for different environments or for scripting.
 
+## V2 Sync with uv (Recommended for Obsidian)
+
+This repository includes a V2 sync runner with:
+
+- incremental/full/resume modes
+- SQLite checkpointing
+- per-page failure isolation
+- run artifacts (`manifest` + `failed.tsv`)
+- state snapshot export/import for cross-machine handoff
+
+### 1. Install dependencies with uv
+
+```sh
+uv sync
+```
+
+You can also use the helper:
+
+```sh
+./scripts/bootstrap-uv.sh
+```
+
+### 2. Configure output to your Obsidian vault
+
+Set your export output once via interactive config:
+
+```sh
+uv run cf-export config
+```
+
+Recommended: point `export.output_path` to a vault subfolder, for example:
+
+```text
+/Users/<you>/Documents/MyVault/Confluence
+```
+
+### 3. Run V2 sync
+
+The included scripts keep state DB and artifacts outside your vault:
+
+- local DB: `.local/export-state.db` (ignored by git)
+- artifacts: `state/` (can be committed if desired)
+
+Run commands:
+
+```sh
+./scripts/sync-full.sh ENG
+./scripts/sync-incremental-today.sh ENG
+./scripts/sync-resume.sh ENG
+```
+
+If you need custom SSL CA:
+
+```sh
+REQUESTS_CA_BUNDLE=/path/to/corp-ca.pem ./scripts/sync-incremental-today.sh ENG
+```
+
+### 4. Share state across machines without committing SQLite
+
+Export JSON snapshot:
+
+```sh
+./scripts/state-export.sh
+```
+
+Import on another machine:
+
+```sh
+./scripts/state-import.sh
+```
+
+Equivalent direct commands:
+
+```sh
+uv run cf-export state-export --db-path ./.local/export-state.db --snapshot-path ./state/state-snapshot.json
+uv run cf-export state-import --snapshot-path ./state/state-snapshot.json --db-path ./.local/export-state.db
+```
+
+### 5. Suggested repo layout
+
+```text
+repo/
+├─ confluence/                  # exported markdown + attachments (optional, if versioned)
+├─ state/                       # snapshot + run artifacts (optional, if versioned)
+│  ├─ state-snapshot.json
+│  ├─ run-manifests/
+│  └─ import-logs/
+├─ .local/
+│  └─ export-state.db           # local SQLite (ignored)
+└─ scripts/
+```
+
+### 6. Script environment overrides
+
+The scripts support optional env vars:
+
+- `SPACE_KEY` (or pass as first argument)
+- `STATE_DB_PATH` (default: `./.local/export-state.db`)
+- `ARTIFACTS_PATH` (default: `./state`)
+- `SNAPSHOT_PATH` (default: `./state/state-snapshot.json`)
+- `TIMEOUT_SECONDS` for resume script (default: `10800`)
+
 ## Update
 
 Update python package via pip.
